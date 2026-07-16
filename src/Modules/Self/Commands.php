@@ -115,7 +115,8 @@ class Commands
 
         Result::out([
             'ok'   => true,
-            'from' => $installed = $this->installedVersion(),
+            'from' => $installed,
+            'to'   => $this->installedVersion(),
             'tag'  => $tag,
             'sha256_verified' => true,
         ]);
