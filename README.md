@@ -31,6 +31,7 @@ wp agent modules            # list active modules on this site
 | Content | `content` | core WP | working |
 | Breakdance | `bd` | Breakdance | working (regen fn auto-detected) |
 | WPCodeBox | `snippet` | WPCodeBox | discovery only (v0) |
+| Self-update | `self` | core WP | working (checksum-verified) |
 
 ### `tp` — TranslatePress
 
@@ -72,17 +73,48 @@ wp agent bd get <post_id>
 wp agent snippet tables    # discover the WPCodeBox schema on the target site
 ```
 
+### `self` — checksum-verified update
+
+Updates the plugin in place from a GitHub release, without SSH or `git pull`.
+By design there is **no "install latest"**: every update names an explicit tag
+**and** the expected SHA-256 of the release asset. The command downloads the
+asset, verifies the hash, and only then extracts — on any mismatch it aborts
+and changes nothing. This keeps every production code swap explicit and
+tamper-evident.
+
+```
+wp agent self version
+wp agent self update --tag=v0.2.0 --sha256=<hash> --dry-run
+wp agent self update --tag=v0.2.0 --sha256=<hash>
+```
+
+The verified artifact is the release asset `wp-agent-connector.zip` (built and
+attached to each release), not GitHub's auto-generated source archive.
+
 ## Install / deploy
 
 This is a normal plugin directory. Deploy it into `wp-content/plugins/` on the
-target site and activate:
+target site (folder name `wp-agent-connector`) and activate:
 
 ```
-wp @site plugin activate agent-connector
+wp @site plugin activate wp-agent-connector
 ```
 
 Because the plugin only registers WP-CLI commands, activating it adds no
-front-end surface.
+front-end surface. After the first install, use `wp agent self update` for
+subsequent versions.
+
+## Releasing
+
+Each release ships a fixed-bytes asset so its checksum is stable:
+
+```
+zip -r wp-agent-connector.zip agent-connector.php src README.md   # from a clean checkout
+sha256sum wp-agent-connector.zip
+gh release create vX.Y.Z wp-agent-connector.zip --title vX.Y.Z --notes "..."
+```
+
+Then update with the printed hash: `wp agent self update --tag=vX.Y.Z --sha256=<hash>`.
 
 ## Roadmap
 
