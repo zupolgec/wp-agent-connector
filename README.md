@@ -32,6 +32,7 @@ wp agent modules            # list active modules on this site
 | Breakdance | `bd` | Breakdance | working (regen fn auto-detected) |
 | WPCodeBox | `snippet` | WPCodeBox | working (list/get/set/toggle, PHP linted) |
 | Self-update | `self` | core WP | working (checksum-verified) |
+| Cache | `cache` | SpinupWP (auto-detected) | working (purge post/url/site) |
 
 ### `tp` — TranslatePress
 

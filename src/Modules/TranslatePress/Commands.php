@@ -170,12 +170,20 @@ class Commands
             $slug = $dry ? '(dry-run)' : $this->setSlug($id, $code, $assoc['slug']);
         }
 
+        // The translated page (/en/...) is a distinct URL the save_post hooks
+        // never touch, so purge it explicitly.
+        $purged = [];
+        if (!$dry) {
+            $purged = \AgentConnector\Core\Cache::purgeUrl($this->translatedUrl($id, $code))['purged'];
+        }
+
         Result::out([
             'post'    => $id,
             'lang'    => $code,
             'applied' => $applied,
             'missed'  => $missed,
             'slug'    => $slug,
+            'purged'  => $purged,
             'dry_run' => $dry,
         ]);
     }

@@ -115,7 +115,9 @@ class Commands
         update_post_meta($id, '_breakdance_data', wp_slash($data));
 
         $cache = isset($assoc['no-cache']) ? 'skipped' : $this->regenerate($id);
-        Result::out(['id' => $id, 'bytes' => strlen($data), 'valid' => $check['valid'], 'issues' => $check['issues'], 'cache' => $cache]);
+        $purge = \AgentConnector\Core\Cache::purgePost($id)['purged'];
+        Result::out(['id' => $id, 'bytes' => strlen($data), 'valid' => $check['valid'],
+            'issues' => $check['issues'], 'cache' => $cache, 'purged' => $purge]);
     }
 
     /**
