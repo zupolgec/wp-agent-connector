@@ -122,6 +122,72 @@ class Commands
         ]);
     }
 
+    /**
+     * Publish a post with a real date that survives the draft->publish reset.
+     *
+     * ## OPTIONS
+     * <post_id>
+     * : The post ID.
+     * [--date=<datetime>]
+     * : Local "YYYY-MM-DD HH:MM:SS" to set (and re-assert after publish).
+     *
+     * ## EXAMPLES
+     *   wp agent content publish 3697 --date="2025-11-05 11:00:00"
+     */
+    public function publish($args, $assoc)
+    {
+        $id = (int) ($args[0] ?? 0);
+        if (!get_post($id)) {
+            Result::fail("Post not found: {$id}");
+        }
+        $date = $assoc['date'] ?? '';
+
+        $update = ['ID' => $id, 'post_status' => 'publish'];
+        if ($date !== '') {
+            $update['post_date']     = $date;
+            $update['post_date_gmt'] = get_gmt_from_date($date);
+            $update['edit_date']     = true;
+        }
+        wp_update_post($update);
+        if ($date !== '') {
+            // Re-assert: WordPress resets a former draft's date to now on publish.
+            wp_update_post(['ID' => $id, 'post_date' => $date, 'post_date_gmt' => get_gmt_from_date($date), 'edit_date' => true]);
+        }
+        $post = get_post($id);
+        Result::out(['id' => $id, 'status' => $post->post_status, 'date' => $post->post_date, 'url' => get_permalink($id)]);
+    }
+
+    /**
+     * Set a post's featured image by sideloading it from a URL.
+     *
+     * ## OPTIONS
+     * <post_id>
+     * : The post ID.
+     * --url=<url>
+     * : Image URL to sideload.
+     * [--alt=<text>]
+     * : Alt text for the image.
+     *
+     * ## EXAMPLES
+     *   wp agent content featured 3697 --url="https://.../img.jpg" --alt="..."
+     */
+    public function featured($args, $assoc)
+    {
+        $id = (int) ($args[0] ?? 0);
+        if (!get_post($id)) {
+            Result::fail("Post not found: {$id}");
+        }
+        $url = $assoc['url'] ?? '';
+        if ($url === '') {
+            Result::fail('--url is required.');
+        }
+        $att = $this->setFeaturedFromUrl($id, $url, $assoc['alt'] ?? '');
+        if (is_wp_error($att)) {
+            Result::fail('Featured image: ' . $att->get_error_message());
+        }
+        Result::out(['id' => $id, 'attachment' => $att, 'thumbnail' => get_post_thumbnail_id($id)]);
+    }
+
     private function setFeaturedFromUrl(int $postId, string $url, string $alt)
     {
         require_once ABSPATH . 'wp-admin/includes/media.php';

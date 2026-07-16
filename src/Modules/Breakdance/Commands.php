@@ -5,12 +5,47 @@ namespace AgentConnector\Modules\Breakdance;
 use AgentConnector\Core\Result;
 
 /**
- * Breakdance helpers. The key one is `set`: after writing _breakdance_data you
- * MUST regenerate the post's CSS cache, otherwise the builder output renders
- * without styles.
+ * Breakdance helpers.
+ *
+ * Two gotchas this guards against:
+ *  - After writing _breakdance_data you MUST regenerate the CSS cache, else the
+ *    output renders unstyled. `set` does it automatically.
+ *  - The builder throws an IO-TS error if the tree lacks "_nextNodeId" or
+ *    "status":"exported". `set` validates and refuses to write broken data
+ *    (override with --force); `validate` checks an existing post.
  */
 class Commands
 {
+    /**
+     * List posts/templates that use Breakdance.
+     *
+     * ## OPTIONS
+     * [--type=<post_type>]
+     * : Filter by post type (e.g. page, breakdance_header, breakdance_template).
+     *
+     * ## EXAMPLES
+     *   wp agent bd list
+     *   wp agent bd list --type=breakdance_template
+     */
+    public function list($args, $assoc)
+    {
+        global $wpdb;
+        $rows = $wpdb->get_results(
+            "SELECT pm.post_id AS id, p.post_type, p.post_title, p.post_status
+             FROM {$wpdb->postmeta} pm
+             JOIN {$wpdb->posts} p ON p.ID = pm.post_id
+             WHERE pm.meta_key = '_breakdance_data'
+             ORDER BY p.post_type, pm.post_id",
+            ARRAY_A
+        );
+        if (!empty($assoc['type'])) {
+            $rows = array_values(array_filter($rows, static function ($r) use ($assoc) {
+                return $r['post_type'] === $assoc['type'];
+            }));
+        }
+        Result::out(['count' => count($rows), 'items' => $rows]);
+    }
+
     /**
      * Output the raw _breakdance_data of a post.
      *
@@ -24,6 +59,27 @@ class Commands
     }
 
     /**
+     * Validate a post's _breakdance_data (JSON + required builder fields).
+     *
+     * ## OPTIONS
+     * <post_id>
+     *
+     * ## EXAMPLES
+     *   wp agent bd validate 123
+     */
+    public function validate($args, $assoc)
+    {
+        $id  = (int) ($args[0] ?? 0);
+        $raw = (string) get_post_meta($id, '_breakdance_data', true);
+        if ($raw === '') {
+            Result::out(['id' => $id, 'has_data' => false, 'valid' => false, 'issues' => ['no _breakdance_data']]);
+            return;
+        }
+        $check = $this->validateData($raw);
+        Result::out(['id' => $id, 'has_data' => true] + $check);
+    }
+
+    /**
      * Write _breakdance_data and regenerate the CSS cache.
      *
      * ## OPTIONS
@@ -31,6 +87,8 @@ class Commands
      * : The post ID.
      * --data=<file>
      * : Path to the _breakdance_data payload, or "-" for STDIN.
+     * [--force]
+     * : Write even if validation fails.
      * [--no-cache]
      * : Skip cache regeneration (not recommended).
      *
@@ -48,10 +106,16 @@ class Commands
         if ($data === false) {
             Result::fail("Cannot read --data: {$src}");
         }
+
+        $check = $this->validateData($data);
+        if (!$check['valid'] && !isset($assoc['force'])) {
+            Result::fail('Breakdance data invalid: ' . implode('; ', $check['issues']) . '. Nothing written. Use --force to override.');
+        }
+
         update_post_meta($id, '_breakdance_data', wp_slash($data));
 
         $cache = isset($assoc['no-cache']) ? 'skipped' : $this->regenerate($id);
-        Result::out(['id' => $id, 'bytes' => strlen($data), 'cache' => $cache]);
+        Result::out(['id' => $id, 'bytes' => strlen($data), 'valid' => $check['valid'], 'issues' => $check['issues'], 'cache' => $cache]);
     }
 
     /**
@@ -64,6 +128,25 @@ class Commands
     {
         $id = (int) ($args[0] ?? 0);
         Result::out(['id' => $id, 'cache' => $this->regenerate($id)]);
+    }
+
+    // ---- helpers ----------------------------------------------------------
+
+    /** Lightweight structural check for the two fields the builder requires. */
+    private function validateData(string $raw): array
+    {
+        $issues = [];
+        $decoded = json_decode($raw, true);
+        if ($decoded === null && strtolower(trim($raw)) !== 'null') {
+            return ['valid' => false, 'issues' => ['not valid JSON']];
+        }
+        if (strpos($raw, '"_nextNodeId"') === false) {
+            $issues[] = 'missing _nextNodeId';
+        }
+        if (strpos($raw, '"status":"exported"') === false && strpos($raw, '"status": "exported"') === false) {
+            $issues[] = 'missing "status":"exported"';
+        }
+        return ['valid' => empty($issues), 'issues' => $issues];
     }
 
     private function regenerate(int $id): string

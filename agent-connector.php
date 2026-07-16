@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Agent Connector
  * Description: Modular WP-CLI toolkit for agent-driven site operations (content, TranslatePress, Breakdance, WPCodeBox). Each module self-activates only when its dependency is present, so the plugin is site-agnostic.
- * Version: 0.3.1
+ * Version: 0.4.0
  * Author: internal
  * Requires PHP: 7.4
  */
@@ -13,7 +13,7 @@ if (!defined('ABSPATH')) {
 
 define('AGENT_CONNECTOR_FILE', __FILE__);
 define('AGENT_CONNECTOR_DIR', __DIR__);
-define('AGENT_CONNECTOR_VERSION', '0.3.1');
+define('AGENT_CONNECTOR_VERSION', '0.4.0');
 
 // Minimal PSR-4 autoloader: AgentConnector\Foo\Bar => src/Foo/Bar.php
 spl_autoload_register(function ($class) {

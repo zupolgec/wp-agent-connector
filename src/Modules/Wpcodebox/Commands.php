@@ -143,13 +143,114 @@ class Commands
             return;
         }
 
+        // One-level backup of the previous code so `restore` can undo a bad edit.
+        update_option('agentconn_snippet_bak_' . $id, ['code' => $row['code'], 'ts' => time()], false);
+
         $wpdb->update(
             $this->table(),
             ['code' => $code, 'lastModified' => (string) time(), 'error' => 0, 'errorMessage' => '', 'errorTrace' => '', 'errorLine' => 0],
             ['id' => $id]
         );
         Result::out(['id' => $id, 'type' => $row['codeType'], 'linted' => $linted,
-            'prev_len' => strlen($row['code']), 'new_len' => strlen($code)]);
+            'prev_len' => strlen($row['code']), 'new_len' => strlen($code), 'backup' => true]);
+    }
+
+    /**
+     * Restore the code saved before the last `set` (one-level undo).
+     *
+     * ## OPTIONS
+     * <id>
+     * : Snippet id.
+     *
+     * ## EXAMPLES
+     *   wp agent snippet restore 19
+     */
+    public function restore($args, $assoc)
+    {
+        global $wpdb;
+        $id  = (int) ($args[0] ?? 0);
+        $bak = get_option('agentconn_snippet_bak_' . $id);
+        if (!is_array($bak) || !isset($bak['code'])) {
+            Result::fail("No backup found for snippet {$id}.");
+        }
+        $wpdb->update(
+            $this->table(),
+            ['code' => $bak['code'], 'lastModified' => (string) time()],
+            ['id' => $id]
+        );
+        Result::out(['id' => $id, 'restored' => true, 'backup_ts' => $bak['ts'] ?? null, 'len' => strlen($bak['code'])]);
+    }
+
+    /**
+     * Create a new snippet (disabled by default for safety).
+     *
+     * ## OPTIONS
+     * --title=<title>
+     * : Snippet title.
+     * --code=<file>
+     * : Path to the code, or "-" for STDIN. For PHP include the <?php tag.
+     * [--type=<type>]
+     * : codeType: php (default), css, js, html.
+     * [--folder=<id>]
+     * : Folder id (default 0).
+     * [--enable]
+     * : Create it enabled (default: disabled, so you can review first).
+     *
+     * ## EXAMPLES
+     *   cat new.php | wp agent snippet create --title="WAY - X" --code=-
+     */
+    public function create($args, $assoc)
+    {
+        global $wpdb;
+        $title = $assoc['title'] ?? '';
+        if ($title === '') {
+            Result::fail('--title is required.');
+        }
+        $src  = $assoc['code'] ?? '';
+        $code = $src === '-' ? file_get_contents('php://stdin') : @file_get_contents($src);
+        if ($code === false) {
+            Result::fail("Cannot read --code: {$src}");
+        }
+        $type = $assoc['type'] ?? 'php';
+        if ($type === 'php') {
+            try {
+                token_get_all($code, TOKEN_PARSE);
+            } catch (\ParseError $e) {
+                Result::fail('PHP syntax error, refused: ' . $e->getMessage());
+            }
+        }
+
+        $row = [
+            'title'             => $title,
+            'description'       => '',
+            'enabled'           => isset($assoc['enable']) ? 1 : 0,
+            'priority'          => 1,
+            'runType'           => 'always',
+            'code'              => $code,
+            'original_code'     => $code,
+            'codeType'          => $type,
+            'conditions'        => '[]',
+            'location'          => '',
+            'tagOptions'        => '',
+            'hook'              => '[{"hook":{"label":"Plugins Loaded (Default)","value":"custom_plugins_loaded"},"priority":1}]',
+            'renderType'        => null,
+            'minify'            => 0,
+            'snippet_order'     => -1,
+            'addToQuickActions' => 0,
+            'savedToCloud'      => 0,
+            'remoteId'          => 0,
+            'externalUrl'       => 0,
+            'secret'            => substr(md5(uniqid('', true)), 0, 20),
+            'folderId'          => isset($assoc['folder']) ? (int) $assoc['folder'] : 0,
+            'error'             => 0,
+            'errorMessage'      => '',
+            'errorTrace'        => '',
+            'errorLine'         => 0,
+            'devMode'           => 0,
+            'lastModified'      => (string) time(),
+        ];
+        $wpdb->insert($this->table(), $row);
+        Result::out(['id' => (int) $wpdb->insert_id, 'title' => $title, 'type' => $type, 'enabled' => $row['enabled']]);
     }
 
     /**

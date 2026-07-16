@@ -206,6 +206,58 @@ class Commands
         Result::out(['post' => $id, 'languages' => $report]);
     }
 
+    /**
+     * Translation coverage for a post, per language.
+     *
+     * ## OPTIONS
+     * <post_id>
+     * : The post ID.
+     *
+     * ## EXAMPLES
+     *   wp agent tp status 3697
+     */
+    public function status($args, $assoc)
+    {
+        global $wpdb;
+        $id = (int) ($args[0] ?? 0);
+        $this->assertPost($id);
+        $haystack = $this->haystack($id);
+
+        $languages = [];
+        foreach (array_diff($this->langs, [$this->default]) as $code) {
+            $table  = $this->table($code);
+            $before = (int) $wpdb->get_var("SELECT COALESCE(MAX(id),0) FROM {$table}");
+            $this->register($id, $code);
+
+            $rows = $wpdb->get_results("SELECT id, original, translated FROM {$table}", ARRAY_A);
+            $translated = 0;
+            $untranslated = 0;
+            foreach ($rows as $r) {
+                if ($r['original'] === '' || $this->isUrl($r['original'])) {
+                    continue;
+                }
+                $scoped = ((int) $r['id']) > $before || $this->contains($haystack, $r['original']);
+                if (!$scoped) {
+                    continue;
+                }
+                if ($r['translated'] !== null && $r['translated'] !== '') {
+                    $translated++;
+                } else {
+                    $untranslated++;
+                }
+            }
+            $total = $translated + $untranslated;
+            $languages[$code] = [
+                'translated'   => $translated,
+                'untranslated' => $untranslated,
+                'total'        => $total,
+                'coverage'     => $total > 0 ? round($translated / $total * 100) . '%' : 'n/a',
+            ];
+        }
+
+        Result::out(['post' => $id, 'languages' => $languages]);
+    }
+
     // ---- helpers ----------------------------------------------------------
 
     private function table(string $code): string

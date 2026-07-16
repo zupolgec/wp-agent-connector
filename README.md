@@ -42,6 +42,7 @@ translate slug → verify), server-side, reusing TP's own tables.
 wp agent tp languages
 wp agent tp strings <post_id> --lang=en_US            # dump untranslated strings (JSON)
 cat en.json | wp agent tp apply <post_id> --lang=en_US --map=- --slug=<slug>
+wp agent tp status <post_id>                          # coverage per language
 wp agent tp verify <post_id>
 ```
 
@@ -54,6 +55,8 @@ values are translations. `--dry-run` on `apply` reports without writing.
 cat post.html | wp agent content bundle --title="..." --content=- \
   --status=publish --date="2025-10-11 11:00:00" --cat=116 --tag=arte-e-cultura \
   --featured-url="https://.../img.jpg" --alt="..."
+wp agent content publish <post_id> --date="2025-11-05 11:00:00"   # date-safe publish
+wp agent content featured <post_id> --url="https://.../img.jpg" --alt="..."
 ```
 
 Handles the WordPress quirk where publishing a former draft resets its date to
@@ -62,24 +65,34 @@ Handles the WordPress quirk where publishing a former draft resets its date to
 ### `bd` — Breakdance
 
 ```
-cat data.json | wp agent bd set <post_id> --data=-     # writes _breakdance_data + regenerates CSS cache
+wp agent bd list [--type=breakdance_template]          # posts/templates using Breakdance
+wp agent bd validate <post_id>                         # check _nextNodeId + status:exported
+cat data.json | wp agent bd set <post_id> --data=-     # validates, writes, regenerates CSS cache
 wp agent bd regen <post_id>
 wp agent bd get <post_id>
 ```
+
+`set` refuses to write data missing the fields the builder needs (`--force` to
+override), and regenerates the CSS cache automatically.
 
 ### `snippet` — WPCodeBox
 
 Read and edit WPCodeBox snippets. WPCodeBox runs snippets straight from its DB
 (no file cache), so a code update applies on the next request. `set` lints PHP
-before writing and refuses on a syntax error.
+before writing and refuses on a syntax error, and keeps a one-level backup so
+`restore` can undo the last edit.
 
 ```
 wp agent snippet list [--type=php] [--enabled] [--folder=<id>]
 wp agent snippet get <id> [--field=code]
 cat snippet.php | wp agent snippet set <id> --code=- [--dry-run]
+wp agent snippet restore <id>                          # undo the last set
+cat new.php | wp agent snippet create --title="WAY - X" --code=- [--enable]
 wp agent snippet toggle <id> --on|--off
 wp agent snippet tables            # schema discovery
 ```
+
+New snippets are created **disabled** by default, so you can review before they run.
 
 ### `self` — checksum-verified update
 
