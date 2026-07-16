@@ -132,19 +132,36 @@ class Commands
 
     // ---- helpers ----------------------------------------------------------
 
-    /** Lightweight structural check for the two fields the builder requires. */
+    /**
+     * Check the builder-required fields. _breakdance_data is
+     * {"tree_json_string": "<escaped JSON>"} and the inner tree must carry
+     * root, _nextNodeId and status:exported (else the builder throws an IO-TS
+     * error, though the front-end still renders).
+     */
     private function validateData(string $raw): array
     {
-        $issues = [];
-        $decoded = json_decode($raw, true);
-        if ($decoded === null && strtolower(trim($raw)) !== 'null') {
+        $outer = json_decode($raw, true);
+        if (!is_array($outer)) {
             return ['valid' => false, 'issues' => ['not valid JSON']];
         }
-        if (strpos($raw, '"_nextNodeId"') === false) {
-            $issues[] = 'missing _nextNodeId';
+        if (!isset($outer['tree_json_string'])) {
+            return ['valid' => false, 'issues' => ['missing tree_json_string']];
         }
-        if (strpos($raw, '"status":"exported"') === false && strpos($raw, '"status": "exported"') === false) {
-            $issues[] = 'missing "status":"exported"';
+        $tree = json_decode($outer['tree_json_string'], true);
+        if (!is_array($tree)) {
+            return ['valid' => false, 'issues' => ['tree_json_string is not valid JSON']];
+        }
+
+        $issues = [];
+        if (!isset($tree['root'])) {
+            $issues[] = 'tree missing root';
+        }
+        if (!isset($tree['_nextNodeId'])) {
+            $issues[] = 'tree missing _nextNodeId';
+        }
+        $status = $tree['status'] ?? null;
+        if ($status !== 'exported') {
+            $issues[] = "tree status is not 'exported' (got " . json_encode($status) . ')';
         }
         return ['valid' => empty($issues), 'issues' => $issues];
     }

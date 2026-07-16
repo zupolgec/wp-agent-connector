@@ -66,7 +66,8 @@ class Commands
             Result::fail('--sha256 must be a 64-character hex SHA-256 of the release asset.');
         }
 
-        $url = 'https://github.com/' . self::REPO . '/releases/download/' . rawurlencode($tag) . '/' . self::ASSET;
+        $url       = 'https://github.com/' . self::REPO . '/releases/download/' . rawurlencode($tag) . '/' . self::ASSET;
+        $installed = $this->installedVersion();
 
         if (isset($assoc['dry-run'])) {
             Result::out([
