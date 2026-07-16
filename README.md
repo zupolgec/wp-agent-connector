@@ -30,7 +30,7 @@ wp agent modules            # list active modules on this site
 | TranslatePress | `tp` | TranslatePress | working |
 | Content | `content` | core WP | working |
 | Breakdance | `bd` | Breakdance | working (regen fn auto-detected) |
-| WPCodeBox | `snippet` | WPCodeBox | discovery only (v0) |
+| WPCodeBox | `snippet` | WPCodeBox | working (list/get/set/toggle, PHP linted) |
 | Self-update | `self` | core WP | working (checksum-verified) |
 
 ### `tp` — TranslatePress
@@ -67,10 +67,18 @@ wp agent bd regen <post_id>
 wp agent bd get <post_id>
 ```
 
-### `snippet` — WPCodeBox (v0)
+### `snippet` — WPCodeBox
+
+Read and edit WPCodeBox snippets. WPCodeBox runs snippets straight from its DB
+(no file cache), so a code update applies on the next request. `set` lints PHP
+before writing and refuses on a syntax error.
 
 ```
-wp agent snippet tables    # discover the WPCodeBox schema on the target site
+wp agent snippet list [--type=php] [--enabled] [--folder=<id>]
+wp agent snippet get <id> [--field=code]
+cat snippet.php | wp agent snippet set <id> --code=- [--dry-run]
+wp agent snippet toggle <id> --on|--off
+wp agent snippet tables            # schema discovery
 ```
 
 ### `self` — checksum-verified update
