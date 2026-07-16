@@ -231,9 +231,33 @@ class Commands
 
     private function translatedUrl(int $id, string $code): string
     {
-        $slug = $this->urlSlugs[$code] ?? '';
+        $langSlug = $this->urlSlugs[$code] ?? '';
         $home = home_url('/');
-        return str_replace($home, $home . ($slug !== '' ? $slug . '/' : ''), get_permalink($id));
+        $url  = str_replace($home, $home . ($langSlug !== '' ? $langSlug . '/' : ''), get_permalink($id));
+
+        // Use the translated post slug when one exists (canonical URL); before
+        // translation it does not, and the Italian slug under /<lang>/ still works.
+        $translatedSlug = $this->translatedSlug($id, $code);
+        if ($translatedSlug !== null && $translatedSlug !== '') {
+            $original = get_post($id)->post_name;
+            $url = preg_replace('~/' . preg_quote($original, '~') . '/?$~', '/' . $translatedSlug . '/', $url);
+        }
+        return $url;
+    }
+
+    private function translatedSlug(int $id, string $code): ?string
+    {
+        global $wpdb;
+        $original     = get_post($id)->post_name;
+        $originals    = $wpdb->prefix . 'trp_slug_originals';
+        $translations = $wpdb->prefix . 'trp_slug_translations';
+        $val = $wpdb->get_var($wpdb->prepare(
+            "SELECT t.translated FROM {$translations} t JOIN {$originals} o ON t.original_id = o.id"
+            . " WHERE o.original = %s AND t.language = %s",
+            $original,
+            $code
+        ));
+        return $val !== null ? (string) $val : null;
     }
 
     private function register(int $id, string $code): void
@@ -262,14 +286,44 @@ class Commands
         return implode("\n", array_filter($parts));
     }
 
+    /**
+     * Fallback scoping for strings that were already registered before this run
+     * (so the id-delta signal misses them). Deliberately strict: short tokens
+     * like "Con", "e", "wp" occur as substrings of unrelated pages' HTML and
+     * would be false positives, so we require a minimum length and true word
+     * boundaries (not a sub-token match). Fresh post strings are already caught
+     * precisely by the id-delta, so a slightly conservative fallback is safe.
+     */
     private function contains(string $haystack, string $needle): bool
     {
-        if (strpos($haystack, $needle) !== false) {
-            return true;
-        }
-        // TP stores rendered HTML (entities like &#8217;); compare decoded too.
+        $needle = trim($needle);
+        // TP stores rendered HTML (entities like &#8217;); test decoded too.
         $decoded = html_entity_decode($needle, ENT_QUOTES | ENT_HTML5);
-        return $decoded !== $needle && strpos($haystack, $decoded) !== false;
+        foreach (array_unique([$needle, $decoded]) as $candidate) {
+            if (mb_strlen($candidate) < 6) {
+                continue;
+            }
+            if ($this->boundedMatch($haystack, $candidate)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** True if $needle appears in $haystack flanked by non-alphanumeric context. */
+    private function boundedMatch(string $haystack, string $needle): bool
+    {
+        $len    = strlen($needle);
+        $offset = 0;
+        while (($pos = strpos($haystack, $needle, $offset)) !== false) {
+            $before = $pos > 0 ? $haystack[$pos - 1] : ' ';
+            $after  = ($pos + $len) < strlen($haystack) ? $haystack[$pos + $len] : ' ';
+            if (!ctype_alnum($before) && !ctype_alnum($after)) {
+                return true;
+            }
+            $offset = $pos + 1;
+        }
+        return false;
     }
 
     private function isUrl(string $s): bool
