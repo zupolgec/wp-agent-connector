@@ -78,14 +78,37 @@ new one.
 
 ```
 wp agent bd list [--type=breakdance_template]          # posts/templates using Breakdance
-wp agent bd validate <post_id>                         # check _nextNodeId + status:exported
+wp agent bd outline <post_id>                          # compact tree: node ids, types, primary text, hash
+wp agent bd validate <post_id>                         # structural validation (ids, nesting, _nextNodeId)
 cat data.json | wp agent bd set <post_id> --data=-     # validates, writes, regenerates CSS cache
+cat patch.json | wp agent bd patch <post_id> <node_id> --data=-   # surgical single-node edit (deep merge)
 wp agent bd regen <post_id>
 wp agent bd get <post_id>
 ```
 
-`set` refuses to write data missing the fields the builder needs (`--force` to
-override), and regenerates the CSS cache automatically.
+The intended agent flow is `outline` → `patch`, not `get` → `set`: the outline
+is a fraction of the size of the raw tree and gives you the node ids, and
+`patch` edits one node in place instead of rewriting the whole page.
+
+Safety model:
+
+- `validate` goes beyond the builder-required fields (`root`, `_nextNodeId`,
+  `status:exported`): it also flags duplicate/missing node ids, a stale
+  `_nextNodeId` (must exceed the highest node id), and known nesting rules
+  (e.g. `Columns` may only contain `Column`). Non-`EssentialElements\`
+  element types are warnings, since third-party element packs are legitimate.
+- `set` refuses invalid data (`--force` to override) and refuses to overwrite
+  a post that already has Breakdance data unless you pass `--replace` or a
+  matching `--expect-hash`.
+- Optimistic locking: `outline`/`validate`/`set`/`patch` report the sha256
+  `hash` of the stored data; pass it back via `--expect-hash` so a concurrent
+  edit fails loudly instead of being clobbered.
+- `patch` deep-merges a JSON object into one node (objects merge, arrays and
+  scalars replace, `null` deletes a key), preserves empty `{}` objects the
+  builder's schema requires, re-validates the whole tree before writing, and
+  regenerates the CSS cache. Note that many elements render text from
+  `properties.content.content.*` (double `content` nesting) — a value placed
+  one level up renders as empty.
 
 ### `snippet` — WPCodeBox
 
