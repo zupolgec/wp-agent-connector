@@ -164,6 +164,21 @@ wp agent self update --tag=v0.2.0 --sha256=<hash>
 The verified artifact is the release asset `wp-agent-connector.zip` (built and
 attached to each release), not GitHub's auto-generated source archive.
 
+### `cache` — purge the page cache
+
+The other modules purge automatically after a direct write; this exposes the
+same purge on its own, for when you need to clear stale HTML by hand.
+
+```
+wp agent cache status                     # which purge providers are detected
+wp agent cache purge --post=<id>          # purge one post's URL(s)
+wp agent cache purge --url=<url>          # purge a specific URL
+wp agent cache purge --site               # purge the whole site
+```
+
+Currently wired for SpinupWP (auto-detected); `status` reports an empty
+provider list when none is present, and a purge is then a no-op.
+
 ## Install / deploy
 
 This is a normal plugin directory. Deploy it into `wp-content/plugins/` on the
