@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  echo "Usage: $0 <pull|status|push> <wp-target> <snippet-id> <local-file>" >&2
+  echo "Example: $0 pull @waytest 17 wpcodebox/way-portfolio.php" >&2
+  exit 2
+}
+
+[[ $# -eq 4 ]] || usage
+
+action=$1
+target=$2
+snippet_id=$3
+local_file=$4
+
+case "$action" in
+  pull)
+    local_dir=$(dirname "$local_file")
+    [[ -d "$local_dir" ]] || {
+      echo "Local directory does not exist: $local_dir" >&2
+      exit 3
+    }
+    temp_file=$(mktemp "${local_file}.tmp.XXXXXX")
+    trap 'rm -f "$temp_file"' EXIT
+    wp "$target" agent snippet pull "$snippet_id" > "$temp_file"
+    [[ -s "$temp_file" ]] || {
+      echo "Remote snippet was empty; local file left unchanged." >&2
+      exit 4
+    }
+    if head -n 1 "$temp_file" | grep -q '^<?php'; then
+      php -l "$temp_file" >/dev/null
+    fi
+    mv "$temp_file" "$local_file"
+    trap - EXIT
+    wp "$target" agent snippet status "$snippet_id" --code=- < "$local_file"
+    ;;
+  status)
+    [[ -f "$local_file" ]] || {
+      echo "Local file not found: $local_file" >&2
+      exit 5
+    }
+    wp "$target" agent snippet status "$snippet_id" --code=- < "$local_file"
+    ;;
+  push)
+    [[ -f "$local_file" ]] || {
+      echo "Local file not found: $local_file" >&2
+      exit 5
+    }
+    if head -n 1 "$local_file" | grep -q '^<?php'; then
+      php -l "$local_file" >/dev/null
+    fi
+    remote_sha=$(wp "$target" agent snippet status "$snippet_id" --field=sha256)
+    wp "$target" agent snippet push "$snippet_id" --code=- --if-match="$remote_sha" < "$local_file"
+    ;;
+  *)
+    usage
+    ;;
+esac

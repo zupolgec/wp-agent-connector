@@ -30,7 +30,8 @@ wp agent modules            # list active modules on this site
 | TranslatePress | `tp` | TranslatePress | working |
 | Content | `content` | core WP | working |
 | Breakdance | `bd` | Breakdance | working (regen fn auto-detected) |
-| WPCodeBox | `snippet` | WPCodeBox | working (list/get/set/toggle, PHP linted) |
+| WPCodeBox | `snippet` | WPCodeBox | working (list/get/status/pull/push, lint + locking) |
+| Database | `db` | core WP | working (guarded read/write SQL) |
 | Self-update | `self` | core WP | working (checksum-verified) |
 | Cache | `cache` | SpinupWP (auto-detected) | working (purge post/url/site) |
 
@@ -87,6 +88,9 @@ before writing and refuses on a syntax error, and keeps a one-level backup so
 wp agent snippet list [--type=php] [--enabled] [--folder=<id>]
 wp agent snippet get <id> [--field=code]
 cat snippet.php | wp agent snippet set <id> --code=- [--dry-run]
+cat snippet.php | wp agent snippet status <id> --code=-
+wp agent snippet pull <id> > snippet.php
+cat snippet.php | wp agent snippet push <id> --code=- --if-match=<remote-sha256>
 wp agent snippet restore <id>                          # undo the last set
 cat new.php | wp agent snippet create --title="WAY - X" --code=- [--enable]
 wp agent snippet toggle <id> --on|--off
@@ -94,6 +98,37 @@ wp agent snippet tables            # schema discovery
 ```
 
 New snippets are created **disabled** by default, so you can review before they run.
+`push` updates both `code` and `original_code`, lints PHP, keeps a one-level
+backup, and can use `--if-match` to refuse overwriting an online edit.
+
+For safe local synchronization, use the bundled helper (it never stores a
+working script on the WordPress server):
+
+```
+bin/wp-agent-snippet-sync status @waytest 17 wpcodebox/way-portfolio.php
+bin/wp-agent-snippet-sync pull   @waytest 17 wpcodebox/way-portfolio.php
+bin/wp-agent-snippet-sync push   @waytest 17 wpcodebox/way-portfolio.php
+```
+
+`pull` writes atomically through a local temporary file and PHP-lints before
+replacing the local copy. `push` reads the remote hash first and uses
+optimistic locking.
+
+### `db` — guarded SQL
+
+```
+wp agent db info
+wp agent db query --sql='SELECT ID, post_title FROM {{prefix}}posts LIMIT 10'
+printf 'SELECT ID, post_title FROM {{prefix}}posts WHERE post_status = %%s' | \
+  wp agent db query --sql=- --params='["publish"]'
+cat update.sql | wp agent db exec --sql=- --dry-run
+cat update.sql | wp agent db exec --sql=- --yes
+```
+
+`query` only accepts read statements. `exec` only accepts data writes
+(`INSERT/UPDATE/DELETE/REPLACE`), rejects multiple statements, and requires
+either a non-executing `--dry-run` or explicit `--yes`. Use `{{prefix}}` and
+`{{base_prefix}}` instead of hard-coding a site's table prefix.
 
 ### `self` — checksum-verified update
 
@@ -131,15 +166,23 @@ subsequent versions.
 Each release ships a fixed-bytes asset so its checksum is stable:
 
 ```
-zip -r wp-agent-connector.zip agent-connector.php src README.md   # from a clean checkout
+zip -r wp-agent-connector.zip agent-connector.php src bin README.md   # from a clean checkout
 sha256sum wp-agent-connector.zip
 gh release create vX.Y.Z wp-agent-connector.zip --title vX.Y.Z --notes "..."
 ```
 
 Then update with the printed hash: `wp agent self update --tag=vX.Y.Z --sha256=<hash>`.
 
+## Tests
+
+```
+php tests/database-commands.php
+php tests/wpcodebox-commands.php
+find . -name '*.php' -not -path './.git/*' -print0 | xargs -0 -n1 php -l
+bash -n bin/wp-agent-snippet-sync
+```
+
 ## Roadmap
 
-- `snippet` read/write once the schema is confirmed on-site.
 - `content` media dedupe; taxonomy helpers.
 - `tp` bulk mode across a list of posts.

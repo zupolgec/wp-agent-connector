@@ -64,7 +64,9 @@ class Commands
             $where[]  = 'folderId = %d';
             $params[] = (int) $assoc['folder'];
         }
-        $sql = "SELECT id, title, codeType, enabled, location, runType, folderId, lastModified FROM {$table}";
+        $sql = "SELECT id, title, codeType, enabled, location, runType, folderId,
+                       lastModified, error, SHA2(code, 256) AS sha256
+                FROM {$table}";
         if ($where) {
             $sql .= ' WHERE ' . implode(' AND ', $where);
         }
@@ -102,6 +104,104 @@ class Commands
     }
 
     /**
+     * Report the remote hash, or compare it with a local code stream.
+     *
+     * ## OPTIONS
+     * <id>
+     * : Snippet id.
+     * [--code=<file>]
+     * : Local code path, or "-" for STDIN.
+     * [--field=<field>]
+     * : Print one status field raw (e.g. sha256).
+     */
+    public function status($args, $assoc)
+    {
+        global $wpdb;
+        $id  = (int) ($args[0] ?? 0);
+        $row = $wpdb->get_row(
+            $wpdb->prepare(
+                "SELECT id, title, codeType, enabled, error, errorMessage, lastModified, code
+                 FROM {$this->table()} WHERE id = %d",
+                $id
+            ),
+            ARRAY_A
+        );
+        if (!$row) {
+            Result::fail("Snippet not found: {$id}");
+        }
+
+        $status = [
+            'id'            => (int) $row['id'],
+            'title'         => $row['title'],
+            'type'          => $row['codeType'],
+            'enabled'       => (int) $row['enabled'],
+            'error'         => (int) $row['error'],
+            'error_message' => $row['errorMessage'],
+            'last_modified' => $row['lastModified'],
+            'bytes'         => strlen($row['code']),
+            'sha256'        => hash('sha256', $row['code']),
+        ];
+
+        if (isset($assoc['code'])) {
+            $local = $this->readCode((string) $assoc['code']);
+            $status['local_bytes']  = strlen($local);
+            $status['local_sha256'] = hash('sha256', $local);
+            $status['state']        = hash_equals($status['sha256'], $status['local_sha256'])
+                ? 'in_sync'
+                : 'different';
+        }
+
+        if (!empty($assoc['field'])) {
+            $field = (string) $assoc['field'];
+            if (!array_key_exists($field, $status)) {
+                Result::fail("No such status field: {$field}");
+            }
+            \WP_CLI::log((string) $status[$field]);
+            return;
+        }
+
+        Result::out($status);
+    }
+
+    /**
+     * Stream a snippet's code to STDOUT for an atomic local pull.
+     *
+     * ## OPTIONS
+     * <id>
+     * : Snippet id.
+     */
+    public function pull($args, $assoc)
+    {
+        global $wpdb;
+        $id   = (int) ($args[0] ?? 0);
+        $code = $wpdb->get_var($wpdb->prepare("SELECT code FROM {$this->table()} WHERE id = %d", $id));
+        if ($code === null) {
+            Result::fail("Snippet not found: {$id}");
+        }
+        // Do not use WP_CLI::line/log here: both append a newline and would
+        // make an exact pull differ from the remote bytes.
+        fwrite(STDOUT, (string) $code);
+    }
+
+    /**
+     * Push code from a file or STDIN. --if-match prevents overwriting a remote edit.
+     *
+     * ## OPTIONS
+     * <id>
+     * : Snippet id.
+     * --code=<file>
+     * : Path to code, or "-" for STDIN.
+     * [--if-match=<sha256>]
+     * : Refuse unless the current remote SHA-256 matches.
+     * [--dry-run]
+     * : Lint and compare without writing.
+     */
+    public function push($args, $assoc)
+    {
+        $this->set($args, $assoc);
+    }
+
+    /**
      * Replace a snippet's code. PHP is linted before writing.
      *
      * ## OPTIONS
@@ -116,15 +216,30 @@ class Commands
     {
         global $wpdb;
         $id  = (int) ($args[0] ?? 0);
-        $row = $wpdb->get_row($wpdb->prepare("SELECT codeType, code FROM {$this->table()} WHERE id = %d", $id), ARRAY_A);
+        $row = $wpdb->get_row(
+            $wpdb->prepare(
+                "SELECT codeType, code, original_code FROM {$this->table()} WHERE id = %d",
+                $id
+            ),
+            ARRAY_A
+        );
         if (!$row) {
             Result::fail("Snippet not found: {$id}");
         }
 
-        $src  = $assoc['code'] ?? '';
-        $code = $src === '-' ? file_get_contents('php://stdin') : @file_get_contents($src);
-        if ($code === false) {
-            Result::fail("Cannot read --code: {$src}");
+        $src = (string) ($assoc['code'] ?? '');
+        if ($src === '') {
+            Result::fail('--code is required.');
+        }
+        $code = $this->readCode($src);
+
+        $previousHash = hash('sha256', $row['code']);
+        $expectedHash = strtolower(trim((string) ($assoc['if-match'] ?? '')));
+        if ($expectedHash !== '' && !hash_equals($previousHash, $expectedHash)) {
+            Result::fail(
+                "Remote snippet changed: expected {$expectedHash}, current {$previousHash}. "
+                . 'Pull or compare before pushing.'
+            );
         }
 
         $linted = false;
@@ -138,21 +253,54 @@ class Commands
         }
 
         if (isset($assoc['dry-run'])) {
-            Result::out(['id' => $id, 'type' => $row['codeType'], 'linted' => $linted,
-                'prev_len' => strlen($row['code']), 'new_len' => strlen($code), 'dry_run' => true]);
+            Result::out([
+                'id'          => $id,
+                'type'        => $row['codeType'],
+                'linted'      => $linted,
+                'prev_len'    => strlen($row['code']),
+                'new_len'     => strlen($code),
+                'prev_sha256' => $previousHash,
+                'new_sha256'  => hash('sha256', $code),
+                'changed'     => !hash_equals($previousHash, hash('sha256', $code)),
+                'dry_run'     => true,
+            ]);
             return;
         }
 
         // One-level backup of the previous code so `restore` can undo a bad edit.
-        update_option('agentconn_snippet_bak_' . $id, ['code' => $row['code'], 'ts' => time()], false);
+        update_option(
+            'agentconn_snippet_bak_' . $id,
+            ['code' => $row['code'], 'original_code' => $row['original_code'], 'ts' => time()],
+            false
+        );
 
-        $wpdb->update(
+        $updated = $wpdb->update(
             $this->table(),
-            ['code' => $code, 'lastModified' => (string) time(), 'error' => 0, 'errorMessage' => '', 'errorTrace' => '', 'errorLine' => 0],
+            [
+                'code'          => $code,
+                'original_code' => $code,
+                'lastModified'  => (string) time(),
+                'error'         => 0,
+                'errorMessage'  => '',
+                'errorTrace'    => '',
+                'errorLine'     => 0,
+            ],
             ['id' => $id]
         );
-        Result::out(['id' => $id, 'type' => $row['codeType'], 'linted' => $linted,
-            'prev_len' => strlen($row['code']), 'new_len' => strlen($code), 'backup' => true]);
+        if ($updated === false) {
+            Result::fail('WPCodeBox update failed: ' . $wpdb->last_error);
+        }
+        Result::out([
+            'id'          => $id,
+            'type'        => $row['codeType'],
+            'linted'      => $linted,
+            'prev_len'    => strlen($row['code']),
+            'new_len'     => strlen($code),
+            'prev_sha256' => $previousHash,
+            'new_sha256'  => hash('sha256', $code),
+            'changed'     => !hash_equals($previousHash, hash('sha256', $code)),
+            'backup'      => true,
+        ]);
     }
 
     /**
@@ -175,7 +323,11 @@ class Commands
         }
         $wpdb->update(
             $this->table(),
-            ['code' => $bak['code'], 'lastModified' => (string) time()],
+            [
+                'code'          => $bak['code'],
+                'original_code' => $bak['original_code'] ?? $bak['code'],
+                'lastModified'  => (string) time(),
+            ],
             ['id' => $id]
         );
         Result::out(['id' => $id, 'restored' => true, 'backup_ts' => $bak['ts'] ?? null, 'len' => strlen($bak['code'])]);
@@ -277,5 +429,14 @@ class Commands
         }
         $wpdb->update($this->table(), ['enabled' => $enabled, 'lastModified' => (string) time()], ['id' => $id]);
         Result::out(['id' => $id, 'enabled' => $enabled]);
+    }
+
+    private function readCode(string $source): string
+    {
+        $code = $source === '-' ? file_get_contents('php://stdin') : @file_get_contents($source);
+        if ($code === false) {
+            Result::fail("Cannot read --code: {$source}");
+        }
+        return (string) $code;
     }
 }
