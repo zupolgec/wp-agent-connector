@@ -1,0 +1,44 @@
+name: Release
+
+# Build the checksum-verified plugin asset and publish a GitHub release
+# whenever a v* tag is pushed. The release notes carry the SHA-256 that
+# `wp agent self update` requires.
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tag must match the plugin version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          header=$(grep -oP '(?<=Version: )[0-9.]+' agent-connector.php | head -1)
+          if [ "$tag" != "$header" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match plugin version $header" >&2
+            exit 1
+          fi
+
+      - name: Build asset
+        run: zip -r wp-agent-connector.zip agent-connector.php src bin README.md
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sha=$(sha256sum wp-agent-connector.zip | cut -d' ' -f1)
+          gh release create "$GITHUB_REF_NAME" wp-agent-connector.zip \
+            --title "$GITHUB_REF_NAME" \
+            --notes "SHA-256 \`$sha\`
+
+          Update with:
+          \`\`\`
+          wp agent self update --tag=$GITHUB_REF_NAME --sha256=$sha
+          \`\`\`"

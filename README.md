@@ -194,7 +194,20 @@ subsequent versions.
 
 ## Releasing
 
-Each release ships a fixed-bytes asset so its checksum is stable:
+Releases are automated. Bump the version in `agent-connector.php`, commit, then
+push a matching tag:
+
+```
+git tag vX.Y.Z
+git push origin main vX.Y.Z
+```
+
+The `.github/workflows/release.yml` workflow then builds the `wp-agent-connector.zip`
+asset, publishes the GitHub release, and puts the asset's SHA-256 in the release
+notes (with the ready-to-run `self update` command). The workflow refuses to run
+if the tag does not match the plugin's `Version:` header.
+
+To build a release by hand (e.g. for a tag that predates the workflow):
 
 ```
 zip -r wp-agent-connector.zip agent-connector.php src bin README.md   # from a clean checkout
