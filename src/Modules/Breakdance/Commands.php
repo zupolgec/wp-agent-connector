@@ -22,6 +22,8 @@ class Commands
      * ## OPTIONS
      * [--type=<post_type>]
      * : Filter by post type (e.g. page, breakdance_header, breakdance_template).
+     * [--limit=<n>]
+     * : Maximum rows (default 500).
      *
      * ## EXAMPLES
      *   wp agent bd list
@@ -30,12 +32,14 @@ class Commands
     public function list($args, $assoc)
     {
         global $wpdb;
+        $limit = max(1, (int) ($assoc['limit'] ?? 500));
         $rows = $wpdb->get_results(
             "SELECT pm.post_id AS id, p.post_type, p.post_title, p.post_status
              FROM {$wpdb->postmeta} pm
              JOIN {$wpdb->posts} p ON p.ID = pm.post_id
              WHERE pm.meta_key = '_breakdance_data'
-             ORDER BY p.post_type, pm.post_id",
+             ORDER BY p.post_type, pm.post_id
+             LIMIT {$limit}",
             ARRAY_A
         );
         if (!empty($assoc['type'])) {
@@ -55,6 +59,9 @@ class Commands
     public function get($args, $assoc)
     {
         $id = (int) ($args[0] ?? 0);
+        if (!get_post($id)) {
+            Result::fail("Post not found: {$id}");
+        }
         \WP_CLI::log((string) get_post_meta($id, '_breakdance_data', true));
     }
 

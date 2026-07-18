@@ -34,18 +34,29 @@ class Commands
      *
      * ## OPTIONS
      * --sql=<sql>
-     * : SQL text, or "-" for STDIN. Allowed: SELECT, SHOW, DESCRIBE, DESC, EXPLAIN.
+     * : SQL text, or "-" for STDIN. Allowed: SELECT, SHOW, DESCRIBE, DESC,
+     *   EXPLAIN, and WITH only when the statement after the CTE definitions
+     *   is a SELECT (MySQL 8.0 also allows WITH ... UPDATE/DELETE; refused).
      * [--params=<json>]
      * : JSON array passed to $wpdb->prepare().
      * [--max-rows=<n>]
-     * : Maximum rows emitted (default 500, maximum 5000).
+     * : Maximum rows emitted (default 500, maximum 5000). Enforced
+     *   server-side only for plain SELECT statements.
      */
     public function query($args, $assoc)
     {
         global $wpdb;
         $sql     = $this->preparedSql($assoc);
         $keyword = $this->keyword($sql);
-        if (!in_array($keyword, ['SELECT', 'SHOW', 'DESCRIBE', 'DESC', 'EXPLAIN'], true)) {
+        if ($keyword === 'WITH') {
+            // MySQL 8.0 allows WITH ... UPDATE/DELETE as well as WITH ...
+            // SELECT, so the read-only guarantee depends on the statement
+            // after the CTE definitions, not on the first keyword.
+            $main = $this->mainStatementKeyword($sql);
+            if ($main !== 'SELECT') {
+                Result::fail("Read-only query refused: WITH ... {$main}. Use db exec for data writes.");
+            }
+        } elseif (!in_array($keyword, ['SELECT', 'SHOW', 'DESCRIBE', 'DESC', 'EXPLAIN'], true)) {
             Result::fail("Read-only query refused: {$keyword}. Use db exec for data writes.");
         }
         if (preg_match('/\bINTO\s+(?:OUTFILE|DUMPFILE)\b/i', $sql)) {
@@ -185,9 +196,103 @@ class Commands
 
     private function assertSingleStatement(string $sql): void
     {
-        $withoutTrailing = rtrim(rtrim($sql), "; \t\n\r\0\x0B");
+        // Blank out literals and comments first, so a ";" inside a string or
+        // a comment is not mistaken for a statement separator.
+        $withoutTrailing = rtrim(rtrim($this->stripIgnored($sql)), "; \t\n\r\0\x0B");
         if (strpos($withoutTrailing, ';') !== false) {
             Result::fail('Multiple SQL statements are not allowed.');
         }
+    }
+
+    /**
+     * SQL with quoted literals and comments blanked out (MySQL string
+     * escapes: '' and \'). Structure survives; string contents cannot
+     * confuse the separator/CTE scans. Multi-statements are also refused by
+     * mysqli itself, which never runs multi_query — defense in depth.
+     */
+    private function stripIgnored(string $sql): string
+    {
+        $stripped = preg_replace(
+            '/\'(?:\'\'|\\\\.|[^\'\\\\])*\'|"(?:""|\\\\.|[^"\\\\])*"/s',
+            "''",
+            $sql
+        );
+        $stripped = preg_replace('/--[^\r\n]*|#[^\r\n]*|\/\*.*?\*\//s', ' ', (string) $stripped);
+        return $stripped === null ? $sql : $stripped;
+    }
+
+    /**
+     * Keyword of the statement that follows a WITH clause.
+     *
+     * Scans a copy of the SQL with literals and comments blanked out, so
+     * parens or keywords inside strings cannot confuse the walk. Skips each
+     * CTE definition — name [(cols)] AS [NOT] [MATERIALIZED] (subquery) —
+     * with real parenthesis matching, then returns the next keyword. Any
+     * parse failure is a refusal: this guard fails closed.
+     */
+    private function mainStatementKeyword(string $sql): string
+    {
+        $s = $this->stripIgnored($sql);
+
+        if (!preg_match('/^\s*WITH\b/i', $s, $m)) {
+            Result::fail('Could not parse the WITH clause.');
+        }
+        $i = strlen($m[0]);
+
+        if (preg_match('/\G\s*RECURSIVE\b/i', $s, $m, 0, $i)) {
+            $i += strlen($m[0]);
+        }
+
+        while (true) {
+            if (!preg_match('/\G\s*(?:`[^`]+`|[a-zA-Z_][a-zA-Z0-9_$]*)\s*/', $s, $m, 0, $i)) {
+                Result::fail('Could not parse the WITH clause (CTE name).');
+            }
+            $i += strlen($m[0]);
+            $i = $this->skipParens($s, $i, false); // optional column list
+            if (!preg_match('/\G\s*AS\b/i', $s, $m, 0, $i)) {
+                Result::fail('Could not parse the WITH clause (AS).');
+            }
+            $i += strlen($m[0]);
+            if (preg_match('/\G\s*(?:NOT\s+)?MATERIALIZED\b/i', $s, $m, 0, $i)) {
+                $i += strlen($m[0]);
+            }
+            $i = $this->skipParens($s, $i, true); // subquery, required
+            if (preg_match('/\G\s*,/', $s, $m, 0, $i)) {
+                $i += strlen($m[0]);
+                continue;
+            }
+            break;
+        }
+
+        if (!preg_match('/\G\s*([a-zA-Z]+)/', $s, $m, 0, $i)) {
+            Result::fail('Could not determine the statement after the WITH clause.');
+        }
+        return strtoupper($m[1]);
+    }
+
+    private function skipParens(string $s, int $i, bool $required): int
+    {
+        $len = strlen($s);
+        while ($i < $len && ctype_space($s[$i])) {
+            $i++;
+        }
+        if ($i >= $len || $s[$i] !== '(') {
+            if ($required) {
+                Result::fail('Could not parse the WITH clause (subquery).');
+            }
+            return $i;
+        }
+        $depth = 0;
+        for (; $i < $len; $i++) {
+            if ($s[$i] === '(') {
+                $depth++;
+            } elseif ($s[$i] === ')') {
+                $depth--;
+                if ($depth === 0) {
+                    return $i + 1;
+                }
+            }
+        }
+        Result::fail('Unbalanced parentheses in the WITH clause.');
     }
 }

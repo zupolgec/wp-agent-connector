@@ -51,6 +51,13 @@ wp agent tp verify <post_id>
 `map` JSON keys are the row ids from `strings` (or exact original strings);
 values are translations. `--dry-run` on `apply` reports without writing.
 
+Note: the TranslatePress dictionary is **global** — an edited string can appear
+on any page. So when `apply` writes at least one string it purges the whole
+site cache (not just the post URL), otherwise other pages could keep serving
+the old translation. `strings` and `status` report a `registration` field per
+language: anything other than `"ok"` means the remote fetch that triggers TP's
+string registration failed, so the string list may be incomplete.
+
 ### `content` — posts, media, dates
 
 ```
@@ -62,7 +69,10 @@ wp agent content featured <post_id> --url="https://.../img.jpg" --alt="..."
 ```
 
 Handles the WordPress quirk where publishing a former draft resets its date to
-"now": the real `--date` is re-asserted after the status change.
+"now": the real `--date` is re-asserted after the status change. `--date` is
+validated strictly (`YYYY-MM-DD HH:MM:SS`, impossible dates refused) and
+`bundle --id` fails if the post does not exist, instead of silently creating a
+new one.
 
 ### `bd` — Breakdance
 
@@ -125,8 +135,12 @@ cat update.sql | wp agent db exec --sql=- --dry-run
 cat update.sql | wp agent db exec --sql=- --yes
 ```
 
-`query` only accepts read statements. `exec` only accepts data writes
-(`INSERT/UPDATE/DELETE/REPLACE`), rejects multiple statements, and requires
+`query` only accepts read statements (`SELECT`, `SHOW`, `DESCRIBE`, `EXPLAIN`;
+`WITH` only when the statement after the CTE definitions is a `SELECT` —
+MySQL 8.0 also allows `WITH ... UPDATE`/`WITH ... DELETE`, which are refused
+on the read side and on the write side alike). `exec` only accepts data writes
+(`INSERT/UPDATE/DELETE/REPLACE`), rejects multiple statements (a `;` inside a
+quoted string literal is fine), and requires
 either a non-executing `--dry-run` or explicit `--yes`. Use `{{prefix}}` and
 `{{base_prefix}}` instead of hard-coding a site's table prefix.
 
@@ -135,9 +149,11 @@ either a non-executing `--dry-run` or explicit `--yes`. Use `{{prefix}}` and
 Updates the plugin in place from a GitHub release, without SSH or `git pull`.
 By design there is **no "install latest"**: every update names an explicit tag
 **and** the expected SHA-256 of the release asset. The command downloads the
-asset, verifies the hash, and only then extracts — on any mismatch it aborts
-and changes nothing. This keeps every production code swap explicit and
-tamper-evident.
+asset, verifies the hash, and only then installs it — on any mismatch it aborts
+and changes nothing. The install is a clean directory swap (current version
+aside → new version into place → old copy removed), so files dropped by a
+release disappear and a failed swap restores the previous version. This keeps
+every production code swap explicit and tamper-evident.
 
 ```
 wp agent self version
@@ -175,9 +191,11 @@ Then update with the printed hash: `wp agent self update --tag=vX.Y.Z --sha256=<
 
 ## Tests
 
+Standalone (no WordPress loaded): each file runs in its own process and uses
+the shared doubles in `tests/lib.php`.
+
 ```
-php tests/database-commands.php
-php tests/wpcodebox-commands.php
+for t in tests/*-commands.php tests/cache-core.php; do php "$t"; done
 find . -name '*.php' -not -path './.git/*' -print0 | xargs -0 -n1 php -l
 bash -n bin/wp-agent-snippet-sync
 ```

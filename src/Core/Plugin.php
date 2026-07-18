@@ -26,9 +26,6 @@ final class Plugin
     {
         $this->discover();
         if (defined('WP_CLI') && WP_CLI) {
-            \WP_CLI::add_hook('before_wp_load', function () {
-                // no-op; kept for future eager needs
-            });
             add_action('cli_init', [$this, 'registerCli']);
         }
     }

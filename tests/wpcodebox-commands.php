@@ -1,95 +1,9 @@
 <?php
 
-define('ARRAY_A', 'ARRAY_A');
-
-class WP_CLI
-{
-    public static $output = [];
-
-    public static function log($message): void
-    {
-        self::$output[] = $message;
-    }
-
-    public static function error($message): void
-    {
-        throw new RuntimeException($message);
-    }
-}
-
-class FakeWpdb
-{
-    public $prefix = 'wp_';
-    public $last_error = '';
-    public $row;
-
-    public function __construct()
-    {
-        $this->row = [
-            'id'            => 17,
-            'title'         => 'Example',
-            'codeType'      => 'php',
-            'enabled'       => 1,
-            'error'         => 0,
-            'errorMessage'  => '',
-            'lastModified'  => '1',
-            'code'          => "<?php\necho 1;\n",
-            'original_code' => "<?php\necho 1;\n",
-        ];
-    }
-
-    public function prepare($sql, $value)
-    {
-        return preg_replace('/%d/', (string) (int) $value, $sql, 1);
-    }
-
-    public function get_row($sql, $format): array
-    {
-        return $this->row;
-    }
-
-    public function get_var($sql)
-    {
-        return $this->row['code'];
-    }
-
-    public function update($table, array $data, array $where)
-    {
-        $this->row = array_merge($this->row, $data);
-        return 1;
-    }
-}
-
-function wp_json_encode($value, $flags = 0)
-{
-    return json_encode($value, $flags);
-}
-
-function update_option($name, $value, $autoload = null): bool
-{
-    return true;
-}
+require __DIR__ . '/lib.php';
 
 require dirname(__DIR__) . '/src/Core/Result.php';
 require dirname(__DIR__) . '/src/Modules/Wpcodebox/Commands.php';
-
-function assert_true($condition, string $message): void
-{
-    if (!$condition) {
-        throw new RuntimeException('Assertion failed: ' . $message);
-    }
-}
-
-function expect_failure(callable $callback, string $contains): void
-{
-    try {
-        $callback();
-    } catch (RuntimeException $error) {
-        assert_true(strpos($error->getMessage(), $contains) !== false, $error->getMessage());
-        return;
-    }
-    throw new RuntimeException('Expected failure containing: ' . $contains);
-}
 
 $wpdb = new FakeWpdb();
 $commands = new AgentConnector\Modules\Wpcodebox\Commands();
@@ -111,6 +25,46 @@ expect_failure(
     },
     'Remote snippet changed'
 );
+
+// restore: undoes the last set, but refuses when the snippet id is unknown.
+$commands->restore([17], []);
+assert_true($wpdb->row['code'] === "<?php\necho 1;\n", 'restore undoes last set');
+
+$wpdb->row = null;
+expect_failure(
+    static function () use ($commands): void {
+        $commands->restore([999], []);
+    },
+    'Snippet not found'
+);
+$wpdb->row = [
+    'id' => 17, 'title' => 'Example', 'codeType' => 'php', 'enabled' => 1,
+    'error' => 0, 'errorMessage' => '', 'lastModified' => '1',
+    'code' => "<?php\necho 1;\n", 'original_code' => "<?php\necho 1;\n",
+];
+
+// create: invalid --type refused, PHP lint errors refused, valid row inserted disabled.
+expect_failure(
+    static function () use ($commands, $file): void {
+        $commands->create([], ['title' => 'X', 'code' => $file, 'type' => 'python']);
+    },
+    'Invalid --type'
+);
+
+$bad = tempnam(sys_get_temp_dir(), 'agentconn_snippet_');
+file_put_contents($bad, "<?php\nfunction broken(\n");
+expect_failure(
+    static function () use ($commands, $bad): void {
+        $commands->create([], ['title' => 'X', 'code' => $bad]);
+    },
+    'PHP syntax error'
+);
+unlink($bad);
+
+$commands->create([], ['title' => 'X', 'code' => $file]);
+$inserted = end($wpdb->inserted);
+assert_true($inserted['enabled'] === 0, 'created disabled by default');
+assert_true(strlen($inserted['secret']) === 20, 'secret generated');
 
 unlink($file);
 echo "wpcodebox-commands: OK\n";

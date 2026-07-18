@@ -108,10 +108,10 @@ class Commands
             Result::fail('Could not locate agent-connector.php in the archive.');
         }
 
-        $copied = copy_dir($root, AGENT_CONNECTOR_DIR);
+        $error = $this->installFrom($root);
         $this->rrmdir($workdir);
-        if (is_wp_error($copied)) {
-            Result::fail('Copy failed: ' . $copied->get_error_message());
+        if ($error !== null) {
+            Result::fail($error);
         }
 
         Result::out([
@@ -142,6 +142,38 @@ class Commands
                 return $sub;
             }
         }
+        return null;
+    }
+
+    /**
+     * Replace the plugin directory with the verified new version.
+     *
+     * A clean swap (current aside → new into place → drop the old copy), not a
+     * copy_dir overlay: files removed in the new release must disappear, and
+     * on failure the previous version is restored. Returns an error message
+     * or null on success.
+     */
+    private function installFrom(string $root): ?string
+    {
+        $target  = AGENT_CONNECTOR_DIR;
+        $parent  = dirname($target);
+        $staging = $parent . '/.agentconn-new-' . uniqid('', true);
+        $backup  = $parent . '/.agentconn-old-' . uniqid('', true);
+
+        $copied = copy_dir($root, $staging);
+        if (is_wp_error($copied)) {
+            $this->rrmdir($staging);
+            return 'Copy failed: ' . $copied->get_error_message();
+        }
+        if (!@rename($target, $backup)) {
+            $this->rrmdir($staging);
+            return 'Could not move the current version aside; nothing changed.';
+        }
+        if (!@rename($staging, $target)) {
+            @rename($backup, $target);
+            return 'Could not move the new version into place; previous version restored.';
+        }
+        $this->rrmdir($backup);
         return null;
     }
 

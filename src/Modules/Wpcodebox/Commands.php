@@ -97,7 +97,9 @@ class Commands
             if (!array_key_exists($field, $row)) {
                 Result::fail("No such field: {$field}");
             }
-            \WP_CLI::log((string) $row[$field]);
+            // Raw output, no trailing newline: --field=code must stay
+            // byte-exact so its sha256 matches the remote.
+            fwrite(STDOUT, (string) $row[$field]);
             return;
         }
         Result::out($row);
@@ -316,7 +318,10 @@ class Commands
     public function restore($args, $assoc)
     {
         global $wpdb;
-        $id  = (int) ($args[0] ?? 0);
+        $id = (int) ($args[0] ?? 0);
+        if (!$wpdb->get_var($wpdb->prepare("SELECT id FROM {$this->table()} WHERE id = %d", $id))) {
+            Result::fail("Snippet not found: {$id}");
+        }
         $bak = get_option('agentconn_snippet_bak_' . $id);
         if (!is_array($bak) || !isset($bak['code'])) {
             Result::fail("No backup found for snippet {$id}.");
@@ -364,6 +369,9 @@ class Commands
             Result::fail("Cannot read --code: {$src}");
         }
         $type = $assoc['type'] ?? 'php';
+        if (!in_array($type, ['php', 'css', 'js', 'html'], true)) {
+            Result::fail("Invalid --type '{$type}'. Allowed: php, css, js, html.");
+        }
         if ($type === 'php') {
             try {
                 token_get_all($code, TOKEN_PARSE);
@@ -392,7 +400,7 @@ class Commands
             'savedToCloud'      => 0,
             'remoteId'          => 0,
             'externalUrl'       => 0,
-            'secret'            => substr(md5(uniqid('', true)), 0, 20),
+            'secret'            => wp_generate_password(20, false),
             'folderId'          => isset($assoc['folder']) ? (int) $assoc['folder'] : 0,
             'error'             => 0,
             'errorMessage'      => '',

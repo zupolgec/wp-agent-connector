@@ -74,7 +74,7 @@ class Commands
         $table  = $this->table($code);
         $before = (int) $wpdb->get_var("SELECT COALESCE(MAX(id),0) FROM {$table}");
 
-        $this->register($id, $code);
+        $registration = $this->register($id, $code);
 
         $haystack = $this->haystack($id);
         $rows = $wpdb->get_results(
@@ -96,10 +96,11 @@ class Commands
         }
 
         Result::out([
-            'post'    => $id,
-            'lang'    => $code,
-            'count'   => count($out),
-            'strings' => $out,
+            'post'         => $id,
+            'lang'         => $code,
+            'count'        => count($out),
+            'registration' => $registration ?? 'ok',
+            'strings'      => $out,
         ]);
     }
 
@@ -170,11 +171,14 @@ class Commands
             $slug = $dry ? '(dry-run)' : $this->setSlug($id, $code, $assoc['slug']);
         }
 
-        // The translated page (/en/...) is a distinct URL the save_post hooks
-        // never touch, so purge it explicitly.
+        // The TP dictionary is global: an edited string can appear on any
+        // page, so only a site purge guarantees no stale translations. When
+        // nothing was applied (slug-only change), the translated URL is enough.
         $purged = [];
         if (!$dry) {
-            $purged = \AgentConnector\Core\Cache::purgeUrl($this->translatedUrl($id, $code))['purged'];
+            $purged = $applied > 0
+                ? \AgentConnector\Core\Cache::purgeSite()['purged']
+                : \AgentConnector\Core\Cache::purgeUrl($this->translatedUrl($id, $code))['purged'];
         }
 
         Result::out([
@@ -235,7 +239,7 @@ class Commands
         foreach (array_diff($this->langs, [$this->default]) as $code) {
             $table  = $this->table($code);
             $before = (int) $wpdb->get_var("SELECT COALESCE(MAX(id),0) FROM {$table}");
-            $this->register($id, $code);
+            $registration = $this->register($id, $code);
 
             $rows = $wpdb->get_results("SELECT id, original, translated FROM {$table}", ARRAY_A);
             $translated = 0;
@@ -260,6 +264,7 @@ class Commands
                 'untranslated' => $untranslated,
                 'total'        => $total,
                 'coverage'     => $total > 0 ? round($translated / $total * 100) . '%' : 'n/a',
+                'registration' => $registration ?? 'ok',
             ];
         }
 
@@ -320,9 +325,14 @@ class Commands
         return $val !== null ? (string) $val : null;
     }
 
-    private function register(int $id, string $code): void
+    private function register(int $id, string $code): ?string
     {
-        wp_remote_get($this->translatedUrl($id, $code), $this->requestArgs());
+        $res = wp_remote_get($this->translatedUrl($id, $code), $this->requestArgs());
+        if (is_wp_error($res)) {
+            return $res->get_error_message();
+        }
+        $status = (int) wp_remote_retrieve_response_code($res);
+        return ($status >= 200 && $status < 400) ? null : "HTTP {$status}";
     }
 
     private function requestArgs(): array

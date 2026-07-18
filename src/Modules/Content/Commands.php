@@ -46,6 +46,13 @@ class Commands
         $status  = $assoc['status'] ?? 'draft';
         $date    = $assoc['date'] ?? '';
 
+        if ($id && !get_post($id)) {
+            // wp_insert_post would silently ignore an unknown ID and create a
+            // new post: fail loudly instead of duplicating content.
+            Result::fail("Post not found: {$id}");
+        }
+        $this->assertDate($date);
+
         $postarr = ['post_type' => 'post'];
         if ($id) {
             $postarr['ID'] = $id;
@@ -141,6 +148,7 @@ class Commands
             Result::fail("Post not found: {$id}");
         }
         $date = $assoc['date'] ?? '';
+        $this->assertDate($date);
 
         $update = ['ID' => $id, 'post_status' => 'publish'];
         if ($date !== '') {
@@ -186,6 +194,23 @@ class Commands
             Result::fail('Featured image: ' . $att->get_error_message());
         }
         Result::out(['id' => $id, 'attachment' => $att, 'thumbnail' => get_post_thumbnail_id($id)]);
+    }
+
+    /**
+     * Refuse malformed dates instead of letting WordPress store garbage.
+     * The strtotime roundtrip catches impossible dates like 2025-02-30.
+     */
+    private function assertDate(string $date): void
+    {
+        if ($date === '') {
+            return;
+        }
+        $ts = strtotime($date);
+        if (!preg_match('/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/', $date)
+            || $ts === false
+            || date('Y-m-d H:i:s', $ts) !== $date) {
+            Result::fail("Invalid --date '{$date}'. Expected format: YYYY-MM-DD HH:MM:SS.");
+        }
     }
 
     private function setFeaturedFromUrl(int $postId, string $url, string $alt)
