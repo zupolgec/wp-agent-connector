@@ -34,6 +34,7 @@ wp agent modules            # list active modules on this site
 | Database | `db` | core WP | working (guarded read/write SQL) |
 | Self-update | `self` | core WP | working (checksum-verified) |
 | Cache | `cache` | SpinupWP (auto-detected) | working (purge post/url/site) |
+| Plugin files | `plugin` | core WP | working (status/pull/push/restore, lint + locking) |
 
 ### `tp` — TranslatePress
 
@@ -146,6 +147,26 @@ bin/wp-agent-snippet-sync push   @waytest 17 wpcodebox/way-portfolio.php
 `pull` writes atomically through a local temporary file and PHP-lints before
 replacing the local copy. `push` reads the remote hash first and uses
 optimistic locking.
+
+### `plugin` — deploy plugin files
+
+Write files under `wp-content/plugins` without ad-hoc scp/FTP. Paths are
+relative to the plugins directory and confined there (no absolute paths, no
+`..`); the connector's own directory is refused (that is `self update`'s job).
+
+```
+wp agent plugin status my-plugin/my-plugin.php [--code=-]   # exists/hashes/active
+wp agent plugin pull my-plugin/my-plugin.php > local.php
+cat local.php | wp agent plugin push my-plugin/my-plugin.php --code=- --new
+cat local.php | wp agent plugin push my-plugin/my-plugin.php --code=- --if-match=<sha256>
+wp agent plugin restore my-plugin/my-plugin.php             # one-level undo
+```
+
+`push` PHP-lints `.php` payloads before writing (nothing changes on a syntax
+error), writes atomically (temp file + rename), invalidates the opcache entry,
+and keeps a one-level `.agentconn-bak` sibling for `restore`. `--new` asserts
+the file does not exist yet; `--if-match` refuses to overwrite a concurrent
+remote edit. Activation stays on the native `wp plugin activate <slug>`.
 
 ### `db` — guarded SQL
 
