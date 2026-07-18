@@ -53,6 +53,28 @@ $error = $method->invoke($commands, $sandbox . '/does-not-exist');
 assert_true(strpos((string) $error, 'Copy failed') !== false, 'copy failure reported');
 assert_true(file_get_contents(AGENT_CONNECTOR_DIR . '/agent-connector.php') === 'current', 'target untouched on failure');
 
+// update --dry-run resolves a pinned version to its tag with no network.
+WP_CLI::$output = [];
+$commands->update(['0.6.2'], ['dry-run' => true]);
+$dry = json_decode(end(WP_CLI::$output), true);
+assert_true($dry['target_tag'] === 'v0.6.2', 'pinned version resolves to tag');
+assert_true($dry['source'] === 'pinned', 'pinned source reported');
+assert_true($dry['dry_run'] === true, 'dry run flagged');
+
+// A leading "v" on the version argument is accepted.
+WP_CLI::$output = [];
+$commands->update(['v0.6.2'], ['dry-run' => true]);
+$dry = json_decode(end(WP_CLI::$output), true);
+assert_true($dry['target_tag'] === 'v0.6.2', 'leading v accepted');
+
+// A malformed --sha256 is refused before anything happens.
+expect_failure(
+    static function () use ($commands): void {
+        $commands->update(['0.6.2'], ['sha256' => 'not-a-real-hash', 'dry-run' => true]);
+    },
+    '--sha256 must be'
+);
+
 // Cleanup.
 $items = new RecursiveIteratorIterator(
     new RecursiveDirectoryIterator($sandbox, FilesystemIterator::SKIP_DOTS),

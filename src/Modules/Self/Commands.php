@@ -5,20 +5,21 @@ namespace AgentConnector\Modules\Self;
 use AgentConnector\Core\Result;
 
 /**
- * Integrity-verified self-update from GitHub release assets.
+ * Self-update from GitHub release assets.
  *
- * There is deliberately NO "install the latest" shortcut: every update names an
- * explicit tag AND the expected SHA-256 of the release zip. The command
- * downloads that asset, verifies the hash, and only then extracts. On any
- * mismatch it refuses and changes nothing. This makes every production code
- * swap explicit and tamper-evident.
+ * `update` installs the latest release, or a version you name. It is gated by
+ * a confirmation prompt (or --yes when non-interactive) and always reports the
+ * downloaded asset's SHA-256. Pass --sha256 to pin an expected hash from an
+ * out-of-band source: only then does a mismatch abort the update. (A hash read
+ * off the same GitHub release adds no tamper-evidence, so it is not required.)
  *
  *   wp agent self version
- *   wp agent self update --tag=v0.2.0 --sha256=<hash>
- *   wp agent self update --tag=v0.2.0 --sha256=<hash> --dry-run
+ *   wp agent self update --yes
+ *   wp agent self update 0.6.2 --yes
+ *   wp agent self update 0.6.2 --sha256=<hash> --dry-run
  *
- * The verified artifact is the release asset "wp-agent-connector.zip" (a zip we
- * build and attach to the release), NOT GitHub's auto-generated source archive
+ * The artifact is the release asset "wp-agent-connector.zip" (a zip we build
+ * and attach to the release), NOT GitHub's auto-generated source archive
  * (whose bytes are not guaranteed stable).
  */
 class Commands
@@ -41,44 +42,57 @@ class Commands
     }
 
     /**
-     * Update the plugin to an explicit, checksum-verified release.
+     * Update the plugin to the latest release, or to a specific version.
+     *
+     * With no version it installs the newest published release. The update is
+     * confirmed interactively unless --yes is passed (required for scripted or
+     * agent-driven runs). The downloaded asset's SHA-256 is always reported;
+     * pass --sha256 to pin an expected hash from an out-of-band source and
+     * abort on any mismatch.
      *
      * ## OPTIONS
-     * --tag=<tag>
-     * : Release tag to install, e.g. v0.2.0. Required (no implicit "latest").
-     * --sha256=<hash>
-     * : Expected SHA-256 (64 hex chars) of the release asset. Required.
+     * [<version>]
+     * : Version to install, e.g. 0.6.2 (a leading "v" is accepted). Omit to
+     *   install the latest release.
+     * [--sha256=<hash>]
+     * : Expected SHA-256 (64 hex chars) of the release asset. Optional; when
+     *   given the update aborts unless the download matches.
+     * [--yes]
+     * : Skip the confirmation prompt (required when not interactive).
      * [--dry-run]
-     * : Show what would happen without downloading or writing.
+     * : Resolve the target and show it without downloading or writing.
      *
      * ## EXAMPLES
-     *   wp agent self update --tag=v0.2.0 --sha256=ab12...ef
+     *   wp agent self update
+     *   wp agent self update 0.6.2 --yes
+     *   wp agent self update --sha256=ab12...ef --yes
      */
     public function update($args, $assoc)
     {
-        $tag  = isset($assoc['tag']) ? trim((string) $assoc['tag']) : '';
-        $hash = isset($assoc['sha256']) ? strtolower(trim((string) $assoc['sha256'])) : '';
+        $version = isset($args[0]) ? ltrim(trim((string) $args[0]), 'vV') : '';
+        $hash    = isset($assoc['sha256']) ? strtolower(trim((string) $assoc['sha256'])) : '';
 
-        if ($tag === '') {
-            Result::fail('--tag is required (no implicit "latest").');
-        }
-        if (!preg_match('/^[0-9a-f]{64}$/', $hash)) {
+        if ($hash !== '' && !preg_match('/^[0-9a-f]{64}$/', $hash)) {
             Result::fail('--sha256 must be a 64-character hex SHA-256 of the release asset.');
         }
 
+        $tag       = $version !== '' ? 'v' . $version : $this->latestTag();
         $url       = 'https://github.com/' . self::REPO . '/releases/download/' . rawurlencode($tag) . '/' . self::ASSET;
         $installed = $this->installedVersion();
 
         if (isset($assoc['dry-run'])) {
             Result::out([
-                'installed'      => $this->installedVersion(),
-                'target_tag'     => $tag,
-                'asset_url'      => $url,
-                'expected_sha256' => $hash,
-                'dry_run'        => true,
+                'installed'       => $installed,
+                'target_tag'      => $tag,
+                'source'          => $version !== '' ? 'pinned' : 'latest',
+                'asset_url'       => $url,
+                'expected_sha256' => $hash !== '' ? $hash : null,
+                'dry_run'         => true,
             ]);
             return;
         }
+
+        \WP_CLI::confirm("Update Agent Connector from {$installed} to {$tag}?", $assoc);
 
         require_once ABSPATH . 'wp-admin/includes/file.php';
         WP_Filesystem();
@@ -88,8 +102,8 @@ class Commands
             Result::fail('Download failed: ' . $zip->get_error_message());
         }
 
-        $actual = hash_file('sha256', $zip);
-        if (!hash_equals($hash, (string) $actual)) {
+        $actual = (string) hash_file('sha256', $zip);
+        if ($hash !== '' && !hash_equals($hash, $actual)) {
             @unlink($zip);
             Result::fail("Checksum mismatch: expected {$hash}, got {$actual}. Aborted, nothing changed.");
         }
@@ -115,15 +129,44 @@ class Commands
         }
 
         Result::out([
-            'ok'   => true,
-            'from' => $installed,
-            'to'   => $this->installedVersion(),
-            'tag'  => $tag,
-            'sha256_verified' => true,
+            'ok'              => true,
+            'from'            => $installed,
+            'to'              => $this->installedVersion(),
+            'tag'             => $tag,
+            'sha256'          => $actual,
+            'sha256_verified' => $hash !== '',
         ]);
     }
 
     // ---- helpers ----------------------------------------------------------
+
+    /** Newest published release tag, via the GitHub API. Fails closed. */
+    private function latestTag(): string
+    {
+        $res = wp_remote_get(
+            'https://api.github.com/repos/' . self::REPO . '/releases/latest',
+            [
+                'timeout' => 30,
+                'headers' => [
+                    'Accept'     => 'application/vnd.github+json',
+                    'User-Agent' => 'wp-agent-connector',
+                ],
+            ]
+        );
+        if (is_wp_error($res)) {
+            Result::fail('Could not query the latest release: ' . $res->get_error_message());
+        }
+        $code = (int) wp_remote_retrieve_response_code($res);
+        if ($code !== 200) {
+            Result::fail("GitHub API returned HTTP {$code} while resolving the latest release.");
+        }
+        $data = json_decode((string) wp_remote_retrieve_body($res), true);
+        $tag  = is_array($data) && isset($data['tag_name']) ? (string) $data['tag_name'] : '';
+        if ($tag === '') {
+            Result::fail('Could not determine the latest release tag.');
+        }
+        return $tag;
+    }
 
     private function installedVersion(): string
     {

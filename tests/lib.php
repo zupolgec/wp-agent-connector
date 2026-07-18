@@ -169,3 +169,8 @@ function wp_generate_password($length = 12, $special_chars = true): string
 {
     return str_repeat('a', (int) $length);
 }
+
+function get_file_data($file, $headers, $context = ''): array
+{
+    return array_map(static fn () => '', $headers);
+}

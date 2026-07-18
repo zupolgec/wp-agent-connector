@@ -144,25 +144,30 @@ quoted string literal is fine), and requires
 either a non-executing `--dry-run` or explicit `--yes`. Use `{{prefix}}` and
 `{{base_prefix}}` instead of hard-coding a site's table prefix.
 
-### `self` — checksum-verified update
+### `self` — self-update
 
 Updates the plugin in place from a GitHub release, without SSH or `git pull`.
-By design there is **no "install latest"**: every update names an explicit tag
-**and** the expected SHA-256 of the release asset. The command downloads the
-asset, verifies the hash, and only then installs it — on any mismatch it aborts
-and changes nothing. The install is a clean directory swap (current version
-aside → new version into place → old copy removed), so files dropped by a
-release disappear and a failed swap restores the previous version. This keeps
-every production code swap explicit and tamper-evident.
+With no version it installs the **latest** release; pass a version to pin one.
+The update is confirmed interactively unless you pass `--yes` (required for
+scripted or agent-driven runs). The install is a clean directory swap (current
+version aside → new version into place → old copy removed), so files dropped by
+a release disappear and a failed swap restores the previous version.
 
 ```
 wp agent self version
-wp agent self update --tag=v0.2.0 --sha256=<hash> --dry-run
-wp agent self update --tag=v0.2.0 --sha256=<hash>
+wp agent self update --dry-run                 # resolve the target, change nothing
+wp agent self update --yes                     # install the latest release
+wp agent self update 0.6.2 --yes               # install a specific version
+wp agent self update 0.6.2 --sha256=<hash> --yes
 ```
 
-The verified artifact is the release asset `wp-agent-connector.zip` (built and
-attached to each release), not GitHub's auto-generated source archive.
+The downloaded asset's SHA-256 is always reported. Passing `--sha256` pins an
+expected hash and aborts on any mismatch — worth doing only when the hash comes
+from a channel independent of the release itself (a hash copied from the same
+GitHub page is verified against its own source and adds no tamper-evidence).
+For real tamper-evidence against a compromised release, sign the asset. The
+artifact is the release asset `wp-agent-connector.zip` (built and attached to
+each release), not GitHub's auto-generated source archive.
 
 ### `cache` — purge the page cache
 
