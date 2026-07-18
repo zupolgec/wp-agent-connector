@@ -34,11 +34,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           sha=$(sha256sum wp-agent-connector.zip | cut -d' ' -f1)
+          version="${GITHUB_REF_NAME#v}"
           gh release create "$GITHUB_REF_NAME" wp-agent-connector.zip \
             --title "$GITHUB_REF_NAME" \
-            --notes "SHA-256 \`$sha\`
+            --notes "Asset SHA-256 \`$sha\`
 
-          Update with:
+          Update to this version:
           \`\`\`
-          wp agent self update --tag=$GITHUB_REF_NAME --sha256=$sha
-          \`\`\`"
+          wp agent self update $version --yes
+          \`\`\`
+          Add \`--sha256=$sha\` to pin the asset (optional; only meaningful from an out-of-band source)."
