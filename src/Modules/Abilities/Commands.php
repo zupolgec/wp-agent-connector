@@ -87,6 +87,10 @@ class Commands
     {
         $ability = $this->ability($args[0]);
         $input   = $this->readInput($assoc);
+        // An object schema rejects null: no --input then means "{}".
+        if ($input === null && (($ability->get_input_schema()['type'] ?? null) === 'object')) {
+            $input = [];
+        }
 
         if (get_current_user_id() < 1) {
             Result::fail('Abilities check user capabilities: pass the global --user=<id|login>.');

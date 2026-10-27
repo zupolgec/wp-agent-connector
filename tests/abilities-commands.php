@@ -9,6 +9,7 @@ class FakeAbility
     public $executed = [];
     public $result;
     public $permission = true;
+    public $inputSchema = ['type' => 'object', 'properties' => ['post_id' => ['type' => 'integer']]];
 
     public function __construct(string $name, array $annotations, $result = ['ok' => 1])
     {
@@ -21,7 +22,7 @@ class FakeAbility
     public function get_label() { return ucfirst($this->name); }
     public function get_description() { return 'Description of ' . $this->name; }
     public function get_category() { return explode('/', $this->name)[0]; }
-    public function get_input_schema() { return ['type' => 'object', 'properties' => ['post_id' => ['type' => 'integer']]]; }
+    public function get_input_schema() { return $this->inputSchema; }
     public function get_output_schema() { return ['type' => 'object']; }
     public function get_meta() { return $this->meta; }
 
@@ -100,9 +101,15 @@ $commands->run(['demo/get-tree'], ['input' => $input]);
 assert_true($last()['result'] === ['root' => []], 'readonly run result');
 assert_true($GLOBALS['fake_abilities']['demo/get-tree']->executed === [['post_id' => 5]], 'readonly executed with input');
 
-// run: no input means no argument (abilities without input schema).
+// run: no input means no argument (abilities without input schema)...
+$GLOBALS['fake_abilities']['core/get-site-info']->inputSchema = [];
 $commands->run(['core/get-site-info'], []);
 assert_true($GLOBALS['fake_abilities']['core/get-site-info']->executed === [null], 'no input passes null');
+
+// ...but an empty object when the schema expects one (e.g. breakdance/get-css-selectors).
+$GLOBALS['fake_abilities']['demo/get-tree']->executed = [];
+$commands->run(['demo/get-tree'], []);
+assert_true($GLOBALS['fake_abilities']['demo/get-tree']->executed === [[]], 'no input passes {} for object schema');
 
 // run: a write ability refuses without --yes and does not execute.
 expect_failure(static function () use ($commands, $input) {
