@@ -35,6 +35,7 @@ wp agent modules            # list active modules on this site
 | Self-update | `self` | core WP | working (checksum-verified) |
 | Cache | `cache` | SpinupWP (auto-detected) | working (purge post/url/site) |
 | Plugin files | `plugin` | core WP | working (status/pull/push/restore, lint + locking) |
+| Abilities | `ability` | Abilities API (WP 6.9+) | working (list/schema/run, writes gated by `--yes`) |
 
 ### `tp` — TranslatePress
 
@@ -167,6 +168,30 @@ error), writes atomically (temp file + rename), invalidates the opcache entry,
 and keeps a one-level `.agentconn-bak` sibling for `restore`. `--new` asserts
 the file does not exist yet; `--if-match` refuses to overwrite a concurrent
 remote edit. Activation stays on the native `wp plugin activate <slug>`.
+
+### `ability` — Abilities API
+
+Runs the abilities plugins register for MCP agents (Breakdance 3, Secure Custom
+Fields, TranslatePress, core...) over WP-CLI, so the same tools work through
+SSH with no HTTP endpoint or application password.
+
+```
+wp agent ability list [--namespace=breakdance]
+wp agent ability schema breakdance/edit-post
+echo '{"post_id":2}' | wp agent ability run breakdance/get-post-tree --input=- --user=1
+cat ops.json | wp agent ability run breakdance/edit-post --input=- --user=1 --dry-run
+cat ops.json | wp agent ability run breakdance/edit-post --input=- --user=1 --yes
+```
+
+Abilities check the current user's capabilities, so `--user` is required.
+`run` validates the input against the ability's schema and checks permissions
+first. An ability annotated `readonly` runs as is; anything else is treated as
+a write and needs `--yes` (or `--dry-run`, which validates without executing).
+After a write whose input has a `post_id`, the post's page cache is purged.
+
+For Breakdance, prefer `breakdance/edit-post` (atomic insert/update/move/delete
+by element id) over `bd set`: it keeps `_nextNodeId`/`status` consistent and
+regenerates the CSS itself.
 
 ### `db` — guarded SQL
 
